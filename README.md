@@ -62,6 +62,12 @@ User
 
 ---
 
+## Architecture Diagram
+
+![Architecture](notification-architecture.png)
+
+---
+
 ## 3. Decision Logic Strategy
 
 The system evaluates events in deterministic stages:

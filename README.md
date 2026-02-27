@@ -54,6 +54,10 @@ Side Components:
 
 ---
 
+## Architecture Diagram
+
+![Architecture](notification-architecture.png)
+
 ## 3. Decision Logic
 
 1. Expiry Check  

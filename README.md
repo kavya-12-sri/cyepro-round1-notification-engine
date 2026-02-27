@@ -5,33 +5,38 @@ Round 1 – Cyepro Solutions
 
 ## 1. Problem Understanding
 
-Applications send notifications from multiple services:
-- Messages
-- Alerts
-- Reminders
-- Promotions
-- System events
+Modern applications generate notifications from multiple services such as messages, reminders, alerts, promotions, and system events.
 
-Users receive too many notifications.
+Users often experience:
+- Notification overload  
+- Repetitive alerts  
+- Poor timing  
+- Important alerts being buried  
 
-The system must decide for each event:
-- NOW → Send immediately
-- LATER → Schedule
-- NEVER → Suppress
+The system must classify each incoming notification as:
+
+- **NOW** → Send immediately  
+- **LATER** → Defer or schedule  
+- **NEVER** → Suppress  
 
 The solution must:
-- Prevent duplicates
-- Reduce alert fatigue
-- Handle conflicting priorities
-- Support configurable rules
-- Provide explainable decisions
-- Fail safely
+- Prevent exact and near-duplicates  
+- Reduce alert fatigue  
+- Resolve conflicting priorities  
+- Support dynamic rule configuration  
+- Provide explainable decisions  
+- Fail safely under service degradation  
+- Scale under high event volume  
 
 ---
 
 ## 2. High-Level Architecture
 
+### Processing Flow
+
 Incoming Event  
+↓  
+Message Queue  
 ↓  
 API Gateway  
 ↓  
@@ -47,10 +52,13 @@ Notification Dispatcher
 ↓  
 User  
 
-Side Components:
-- User History DB
-- Rule Engine
-- Audit Log DB
+### Supporting Components
+
+- Redis Cache (dedupe + counters)  
+- User History DB  
+- Rule Engine (dynamic rules)  
+- Audit Log DB  
+- Retry / Dead Letter Queue  
 
 ---
 
@@ -58,58 +66,69 @@ Side Components:
 
 ![Architecture](notification-architecture.png)
 
-## 3. Decision Logic
+---
 
-1. Expiry Check  
-If expired → NEVER  
+## 3. Decision Logic Strategy
 
-2. Duplicate Check  
-If duplicate → NEVER  
+The system evaluates events in deterministic stages:
 
-3. Urgency Check  
-If high priority and time-sensitive → NOW  
+1. **Expiry Check**  
+   If expired → NEVER  
 
-4. Alert Fatigue Check  
-If hourly/daily limit exceeded → LATER  
+2. **Duplicate Check**  
+   If exact or near duplicate → NEVER  
 
-5. Promotional Filtering  
-If promotional during noisy period → LATER or NEVER  
+3. **Urgency Evaluation**  
+   If high priority and time-sensitive → NOW  
 
-6. Default  
-Send NOW  
+4. **Alert Fatigue Evaluation**  
+   If hourly/daily limits exceeded → LATER  
+
+5. **Promotional Filtering**  
+   If promotional during noisy period → LATER or NEVER  
+
+6. **Conflict Resolution**  
+   Urgent > Fatigue rules  
+   Transactional > Promotional  
+
+7. **Default Case**  
+   Send NOW  
+
+Every decision generates an explanation stored in audit logs.
 
 ---
 
-## 4. Data Model
+## 4. Minimal Data Model
 
 ### NotificationEvent
-- event_id
-- user_id
-- event_type
-- message
-- priority_hint
-- timestamp
-- expires_at
-- channel
-- dedupe_key
+- event_id  
+- user_id  
+- event_type  
+- message  
+- source  
+- priority_hint  
+- timestamp  
+- expires_at  
+- channel  
+- dedupe_key  
 
 ### UserNotificationHistory
-- user_id
-- last_notification_time
-- hourly_count
-- daily_count
+- user_id  
+- last_notification_time  
+- hourly_count  
+- daily_count  
 
 ### SuppressionRecord
-- event_id
-- suppression_reason
-- timestamp
+- event_id  
+- suppression_reason  
+- timestamp  
 
 ### AuditLog
-- event_id
-- decision
-- explanation
-- decision_time_ms
-- fallback_used
+- event_id  
+- decision (Now/Later/Never)  
+- explanation  
+- decision_time_ms  
+- fallback_used  
 
 ---
 
@@ -125,61 +144,98 @@ GET /health
 
 ## 6. Duplicate Prevention Strategy
 
-Exact Duplicate:
-- Use dedupe_key
-- Or generate hash(user_id + event_type + message)
-- Store in Redis (10 min TTL)
+### Exact Duplicates
+- Use dedupe_key if present  
+- Else generate hash(user_id + event_type + message)  
+- Store in Redis with TTL (10 min)  
 
-Near Duplicate:
-- Compare with last 5 notifications
-- If similarity > 85% → Suppress
+### Near Duplicates
+- Compare against recent notifications  
+- Similarity threshold > 85% → Suppress  
 
 ---
 
 ## 7. Alert Fatigue Strategy
 
-- Max 5 notifications per hour
-- Max 20 per day
-- 5-minute cooldown
-- Quiet hours (10PM–7AM)
-- Batch low priority notifications into digest
+- Max 5 notifications per hour  
+- Max 20 per day  
+- 5-minute cooldown  
+- Quiet hours (10PM–7AM)  
+- Batch low-priority notifications into digest  
+
+This prevents alert overload while preserving critical alerts.
 
 ---
 
-## 8. Fallback Strategy
+## 8. AI-Native Layer
 
-If AI is slow/unavailable:
-- Timeout 200ms
-- Switch to rule-based engine
-- Retry queue
-- Never drop high priority notifications
-- Log fallback reason
+An AI scoring model evaluates:
+- Predicted user engagement  
+- Context relevance  
+- Historical response behavior  
 
----
+AI output influences:
+- NOW vs LATER classification  
+- Promotional suppression  
+- Adaptive fatigue limits  
 
-## 9. Metrics & Monitoring
-
-- Decision latency
-- Suppression rate
-- Duplicate rate
-- Delivery success rate
-- System uptime
-
-Monitoring:
-- Prometheus
-- Grafana
-- Central logging
+AI decisions are bounded by rule-based safety controls to ensure reliability.
 
 ---
 
-## 10. Tradeoffs
+## 9. Fallback Strategy
 
-- AI accuracy vs latency
-- Strict suppression vs missing important alerts
-- More rules increase complexity
+If AI or dependent services fail:
+
+- Timeout at 200ms  
+- Switch to deterministic rule engine  
+- Route failed dispatches to retry queue  
+- Use Dead Letter Queue for repeated failures  
+- Never silently drop high-priority alerts  
+- Log fallback reason in audit log  
 
 ---
 
-## 11. Conclusion
+## 10. Scalability & Reliability
 
-This solution provides a scalable, explainable, and fault-tolerant notification prioritization system that balances urgency and user experience.
+To handle thousands of events per minute:
+
+- Event ingestion via message queue  
+- Stateless services for horizontal scaling  
+- Redis cache for low-latency lookups  
+- Partitioned databases by user_id  
+- Retry and Dead Letter Queues  
+- Health checks and monitoring  
+
+---
+
+## 11. Metrics & Monitoring
+
+Key metrics:
+
+- Decision latency  
+- Suppression rate  
+- Duplicate rate  
+- AI fallback rate  
+- Delivery success rate  
+- System uptime  
+
+Monitoring tools:
+- Prometheus  
+- Grafana  
+- Central logging  
+
+---
+
+## 12. Tradeoffs
+
+- AI accuracy vs latency  
+- Aggressive suppression vs missed urgent alerts  
+- More rules increase complexity  
+- Strong fatigue control vs engagement loss  
+
+---
+
+## 13. Conclusion
+
+This solution provides a scalable, explainable, AI-assisted, and fault-tolerant notification prioritization system that balances urgency, user experience, and operational reliability.
